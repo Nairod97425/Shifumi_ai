@@ -2,11 +2,9 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional
 
-# Schéma pour créer un joueur
 class PlayerCreate(BaseModel):
     player_name: str = Field(..., min_length=1, max_length=50)
 
-# Schéma pour la réponse du joueur
 class PlayerResponse(BaseModel):
     id: int
     player_name: str
@@ -19,35 +17,30 @@ class PlayerResponse(BaseModel):
     created_at: datetime
 
     class Config:
-        from_attributes =True
+        from_attributes = True
 
-# Schéma pour enregistrer une partie 
 class GamePlay(BaseModel):
     player_name: str
-    player_choice: str # "Pierre", "Feuille", "Ciseaux"
+    player_choice: str 
 
-# Schéma pour le résultat d'une partie
 class GameResult(BaseModel):
-    id: int
     player_choice: str
     ai_choice: str
-    result: str # "Win", "Lose", "Draw"
+    result: str 
     message: str
     updated_score: PlayerResponse
 
-# Schéma pour l'historique d'une partie
 class GameHistoryReponse(BaseModel):
     id: int
     player_name: str
     player_choice: str
-    ai_chioce: str
+    ai_choice: str  # Correction de la faute "ai_chioce"
     result: str
     timestamp: datetime
 
     class Config:
         from_attributes = True
 
-# Schéma pour le classement
 class LeaderboardEntry(BaseModel):
     rank: int 
     player_name: str
@@ -58,9 +51,3 @@ class LeaderboardEntry(BaseModel):
 
     class Config:
         from_attributes = True
-
-# Schéma pour la détecton de geste 
-class GestureDetecction(BaseModel):
-    gesture: Optional[str] = None # "Pierre", "Feuille", "Ciseaux"
-    confidence: float = 0.0
-    detected: bool = False
