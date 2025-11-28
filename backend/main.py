@@ -6,27 +6,25 @@ from contextlib import asynccontextmanager
 import database
 import schemas
 import game_logic
+import groq_service  # <--- Notre nouveau service
 from datetime import datetime, timezone
 
-# --- INITIALISATION AUTOMATIQUE DE LA BDD ---
+# --- INITIALISATION BDD ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
         database.init_db()
-        print("✅ Base de données initialisée avec succès (Tables créées)")
+        print("✅ Base de données initialisée")
     except Exception as e:
-        print(f"❌ Erreur critique BDD: {e}")
+        print(f"❌ Erreur BDD: {e}")
     yield
 
-app = FastAPI(
-    title="Shifumi AI API",
-    lifespan=lifespan
-)
+app = FastAPI(title="Shifumi AI API", lifespan=lifespan)
 
-# --- CONFIGURATION CORS (Pour autoriser React/Vite) ---
+# --- CORS ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Accepte toutes les origines
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -36,7 +34,7 @@ app.add_middleware(
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    return {"status": "ok", "mode": "Groq AI"}
 
 @app.post("/players/", response_model=schemas.PlayerResponse)
 def create_player(player: schemas.PlayerCreate, db: Session = Depends(database.get_db)):
@@ -55,27 +53,42 @@ def create_player(player: schemas.PlayerCreate, db: Session = Depends(database.g
 
 @app.post("/play/", response_model=schemas.GameResult)
 def play_game(game: schemas.GamePlay, db: Session = Depends(database.get_db)):
-    # 1. Validation
+    # 1. Validation du coup joueur
     if not game_logic.is_valid_choice(game.player_choice):
         raise HTTPException(status_code=400, detail="Choix invalide")
     
-    # 2. Récupération Joueur
+    # 2. Récupération ou création du joueur
     player = db.query(database.PlayerScore).filter(
         database.PlayerScore.player_name == game.player_name
     ).first()
     
     if not player:
-        # Création auto si le joueur n'existe pas encore
         player = database.PlayerScore(player_name=game.player_name)
         db.add(player)
         db.commit()
         db.refresh(player)
     
-    # 3. Logique de jeu
-    ai_choice = game_logic.get_ai_choice()
-    result, message = game_logic.determine_winner(game.player_choice, ai_choice)
+    # 3. Récupération de l'historique récent (Context pour l'IA)
+    # On prend les 5 derniers coups
+    last_games = db.query(database.GameHistory).filter(
+        database.GameHistory.player_name == game.player_name
+    ).order_by(database.GameHistory.timestamp.desc()).limit(5).all()
     
-    # 4. Mise à jour stats
+    # On formate l'historique pour le service Groq (on remet dans l'ordre chronologique)
+    history_data = [
+        {"player_choice": g.player_choice, "result": g.result} 
+        for g in last_games
+    ][::-1] 
+
+    # 4. Appel à l'IA Groq
+    ai_response = groq_service.get_ai_move_smart(history_data)
+    ai_choice = ai_response["ai_choice"]
+    ai_commentary = ai_response["commentary"]
+    
+    # 5. Détermination du gagnant
+    result, technical_message = game_logic.determine_winner(game.player_choice, ai_choice)
+    
+    # 6. Mise à jour des stats joueur
     player.games_played += 1
     if result == "Win":
         player.wins += 1
@@ -91,7 +104,7 @@ def play_game(game: schemas.GamePlay, db: Session = Depends(database.get_db)):
     
     player.updated_at = database.get_utc_now()
     
-    # 5. Historique
+    # 7. Sauvegarde dans l'historique
     game_history = database.GameHistory(
         player_name=game.player_name,
         player_choice=game.player_choice,
@@ -99,15 +112,18 @@ def play_game(game: schemas.GamePlay, db: Session = Depends(database.get_db)):
         result=result
     )
     db.add(game_history)
-    
     db.commit()
     db.refresh(player)
+    
+    # 8. Construction de la réponse finale
+    # On combine le message technique ("Pierre bat Ciseaux") avec le commentaire de l'IA
+    final_message = f"{technical_message}\n💬 {ai_commentary}"
     
     return schemas.GameResult(
         player_choice=game.player_choice,
         ai_choice=ai_choice,
         result=result,
-        message=message,
+        message=final_message,
         updated_score=player
     )
 
